@@ -7,11 +7,11 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.ico', 'icon-192.png', 'icon-512.png'],
+      includeAssets: ['favicon.svg', 'icon-192.png', 'icon-512.png'],
       manifest: {
         name: 'Elegoo RFID Editor',
         short_name: 'RFID Editor',
-        description: 'Edit Elegoo NTAG213 NFC spool tags',
+        description: 'Edit Elegoo NTAG215 NFC spool tags',
         theme_color: '#FF6B35',
         background_color: '#ffffff',
         display: 'standalone',
@@ -30,9 +30,10 @@ export default defineConfig({
       }
     })
   ],
-  base: '/elegoo-rfid-editor/',
+  base: './',
   build: {
     outDir: 'dist',
     sourcemap: true
   }
 })
+

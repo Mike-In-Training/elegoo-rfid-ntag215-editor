@@ -21,6 +21,8 @@ const INTERNAL_BASE = new Uint8Array([
   0xBD, 0x04, 0x00, 0x00,
 ]);
 
+export const MAX_LABEL_BYTES = 33;
+
 export class ElegooSpool {
   private data: Uint8Array;
 
@@ -220,7 +222,38 @@ export class ElegooSpool {
     return new Blob([new Uint8Array(this.data)], { type: 'application/octet-stream' });
   }
 
-  // Export mobile commands (optimized - skips all-zero pages)
+  // Offset 0x15 survives the Web NFC record framing. The label ends before
+  // the Canvas data at 0x40. Raw exports use NULL TLVs before the text TLV.
+  get label(): string {
+    const bytes = this.data.subarray(0x15, 0x40);
+    const size = bytes[1] - 7;
+    if (size < 1 || size > MAX_LABEL_BYTES || bytes[0] !== 3 ||
+        bytes[2] !== 0xD1 || bytes[3] !== 1 || bytes[4] !== size + 3 ||
+        bytes[5] !== 0x54 || bytes[6] !== 2 || bytes[7] !== 0x65 ||
+        bytes[8] !== 0x6E || bytes[9 + size] !== 0xFE) return '';
+    try {
+      return new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(9, 9 + size));
+    } catch {
+      return '';
+    }
+  }
+
+  set label(value: string) {
+    const text = new TextEncoder().encode(value);
+    if (text.length > MAX_LABEL_BYTES) throw new RangeError('Spool label is too long');
+
+    if (!text.length) {
+      this.data.set(INTERNAL_BASE.slice(0x10, 0x40), 0x10);
+      return;
+    }
+
+    this.data.fill(0, 0x10, 0x40);
+    this.data.set([3, text.length + 7, 0xD1, 1, text.length + 3, 0x54, 2, 0x65, 0x6E], 0x15);
+    this.data.set(text, 0x1E);
+    this.data[0x1E + text.length] = 0xFE;
+  }
+
+  // Export all label pages so rewrites also replace old metadata.
   exportMobileCommands(): string {
     const commands: string[] = [];
     for (let page = 4; page <= 44; page++) {
@@ -228,13 +261,13 @@ export class ElegooSpool {
       const pageData = this.data.slice(offset, offset + 4);
 
       // Skip pages that are all zeros (optimization for faster mobile writes)
-      if (pageData.every((b) => b === 0)) {
+      if (page >= 16 && pageData.every((b) => b === 0)) {
         continue;
       }
 
       const hex = Array.from(pageData)
         .map((b) => b.toString(16).padStart(2, '0').toUpperCase())
-        .join('');
+        .join(':');
       commands.push(`A2:${page.toString(16).padStart(2, '0').toUpperCase()}:${hex}`);
     }
     return commands.join(', ');

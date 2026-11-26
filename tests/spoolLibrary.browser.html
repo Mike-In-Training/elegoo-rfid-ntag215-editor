@@ -1,0 +1,182 @@
+<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><div id="root"></div><pre id="result" style="white-space:pre-wrap">RUNNING</pre>
+<script type="module">
+import '/src/index.css';
+import React from 'react';
+import { createRoot } from 'react-dom/client';
+import App from '/src/App.tsx';
+import { ElegooSpool, MAX_LABEL_BYTES } from '/src/lib/ElegooSpool.ts';
+import * as library from '/src/lib/spoolLibrary.ts';
+const output = document.getElementById('result');
+const checks = [];
+function assert(condition, message) { if (!condition) throw Error(message); checks.push(message); }
+const pause = () => new Promise(resolve => setTimeout(resolve, 60));
+async function waitFor(predicate) { for(let i=0;i<150;i++){if(predicate()) return;await pause();}throw Error('Timed out waiting for UI'); }
+const button = text => [...document.querySelectorAll('button')].find(node => node.textContent.trim() === text);
+function input(node, value) { const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;setter.call(node,value);node.dispatchEvent(new Event('input',{bubbles:true})); }
+window.confirm = () => true;
+// This test page uses its own database and never opens the user's library.
+const realIndexedDB = window.indexedDB;
+const testDatabase = 'spool-library-test-' + library.newProfileId();
+Object.defineProperty(window, 'indexedDB', { configurable: true, value: {
+  open: (_name, version) => realIndexedDB.open(testDatabase, version),
+} });
+try {
+  for (const profile of await library.listSavedSpools()) await library.deleteSavedSpool(profile.id);
+  const original = new ElegooSpool();
+  original.label = 'Mars Blue'; original.color = {r:12,g:34,b:56}; original.minTemp=205; original.maxTemp=225;
+  const expectedMobileCommands = original.exportMobileCommands();
+  const profile = library.makeSavedSpool(original.getRawData());
+  await library.saveSpool(profile);
+  original.label='Changed outside saved snapshot';
+  let entries=await library.listSavedSpools();
+  assert(entries.length===1 && new ElegooSpool(new Uint8Array(entries[0].data)).label==='Mars Blue','Save is an independent snapshot and survives database reopen');
+  const restoredSpool=new ElegooSpool(new Uint8Array(entries[0].data));
+  assert(restoredSpool.color.r===12 && restoredSpool.color.g===34 && restoredSpool.color.b===56 && restoredSpool.minTemp===205 && restoredSpool.maxTemp===225,'Exact color, label and temperatures survive storage');
+  assert(restoredSpool.exportMobileCommands()===expectedMobileCommands,'Saved profiles preserve the exact existing Mobile commands');
+  const backup=library.encodeLibraryBackup(entries);
+  const decoded=library.decodeLibraryBackup(backup);
+  assert(JSON.stringify(decoded)===JSON.stringify(entries),'Backup preserves all profile bytes and metadata');
+  let merged=await library.restoreLibrary(decoded);
+  assert(merged.added===0 && merged.skipped===1,'Restoring identical backup does not duplicate entries');
+  decoded[0].name='Changed on another device';
+  const changedSpool=new ElegooSpool(new Uint8Array(decoded[0].data));changedSpool.label=decoded[0].name;
+  decoded[0].data=Array.from(changedSpool.getRawData());
+  merged=await library.restoreLibrary(decoded);
+  entries=await library.listSavedSpools();
+  assert(merged.added===1 && entries.length===2 && entries.some(e=>e.name==='Mars Blue'),'Conflicting restore preserves existing spool and adds separate copy');
+  const invalids=['no JSON',JSON.stringify({format:'elegoo-spool-library',version:2,spools:[]}),JSON.stringify({format:'elegoo-spool-library',version:1,spools:[{...profile,data:[1,2]}]}),JSON.stringify({format:'elegoo-spool-library',version:1,spools:[profile,profile]})];
+  for(const bad of invalids){let failed=false;try{library.decodeLibraryBackup(bad);}catch{failed=true;}assert(failed,'Malformed/unsupported backup rejected before writes');}
+  assert((await library.listSavedSpools()).length===2,'Rejected backups leave stored library intact');
+  let mismatchRejected=false;
+  try { library.decodeLibraryBackup(JSON.stringify({format:'elegoo-spool-library',version:1,spools:[{...profile,name:'Different name'}]})); } catch { mismatchRejected=true; }
+  assert(mismatchRejected,'Backups reject separate library and tag names');
+  const root=createRoot(document.getElementById('root'));root.render(React.createElement(App));
+  await waitFor(()=>document.querySelector('[aria-label="Load Mars Blue"]'));
+  const toggle=document.querySelector('[aria-controls="my-spools-content"]');
+  assert(toggle.getAttribute('aria-expanded')==='false' && document.getElementById('my-spools-content').hidden,'My Spools starts collapsed');
+  assert(document.getElementById('my-spools-heading').closest('section').getBoundingClientRect().height<80,'Collapsed library occupies one compact row');
+  document.querySelector('[aria-label="About My Spools"]').click();await pause();
+  assert(document.getElementById('my-spools-help') && document.getElementById('my-spools-content').hidden,'Help opens on tap without expanding library');
+  document.querySelector('[aria-label="About My Spools"]').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));await pause();
+  assert(!document.getElementById('my-spools-help'),'Help dismisses with Escape');
+  button('Filament Color Catalog').click();await pause();
+  function select(label,value){const node=document.querySelector(`[aria-label="${label}"]`);node.value=value;node.dispatchEvent(new Event('change',{bubbles:true}));}
+  select('Filament catalog material','PLA+');await pause();
+  document.querySelector('[aria-label="Select Elegoo PLA+ Red"]').click();await pause();
+  assert(document.querySelector('[aria-label="Spool label"]').value==='Elegoo-PLA+ | Red' && document.querySelector('[aria-label="Hex color"]').value==='#EA140E','Elegoo catalog selection updates suggested label and RGB atomically');
+  select('Filament catalog brand','Hatchbox');await pause();
+  select('Filament catalog material','PETG');await pause();
+  document.querySelector('[aria-label="Select Hatchbox PETG Orange"]').click();await pause();
+  assert(document.querySelector('[aria-label="Spool label"]').value==='Hatchbox-PETG | Orange','Hatchbox catalog selection suggests Brand-Filament | Color');
+  assert(!document.querySelector('#my-spools-content label input'),'There is no separate library-name input');
+  select('Filament catalog brand','Matterhackers');await pause();
+  select('Filament catalog material','PLA+');await pause();
+  document.querySelector('[aria-label="Select Matterhackers PLA+ Translucent Orange"]').click();await pause();
+  const fullSuggestion='Matterhackers-PLA+ | Translucent Orange';
+  assert(document.querySelector('[aria-label="Spool label"]').value===fullSuggestion,'Long catalog suggestion stays visible without truncation');
+  assert(document.querySelector('[aria-label="Spool label"]').getAttribute('aria-invalid')==='true' && button('Mobile').disabled && button('Hex').disabled && (button('Share') ?? button('Download')).disabled && button('Save .BIN').disabled && button('Save Spool').disabled,'Overlong draft blocks library saves and every export route');
+  assert(document.getElementById('spool-label-hint').textContent.includes('Shorten'),'Overlong draft explains required shortening');
+  input(document.querySelector('[aria-label="Spool label"]'),'MH-PLA+ | Translucent Orange');await pause();
+  assert(!button('Mobile').disabled && !button('Save Spool').disabled,'Shortening the label enables saving and export');
+  const colorBeforeClear=document.querySelector('[aria-label="Hex color"]').value;
+  document.querySelector('[aria-label="Clear spool label"]').click();await pause();
+  assert(document.querySelector('[aria-label="Spool label"]').value==='' && document.activeElement.id==='spool-label','Clear empties and focuses the spool label');
+  assert(document.querySelector('[aria-label="Hex color"]').value===colorBeforeClear,'Clearing label preserves selected filament color');
+  assert(button('Mobile').disabled && button('Save Spool').disabled,'Empty labels cannot be saved or exported');
+  toggle.click();await pause();
+  assert(!document.getElementById('my-spools-content').hidden,'Library expands on tap');
+  assert(!button('Read Tag') && button('Mobile'),'Library is usable in browser without Web NFC');
+  document.querySelector('[aria-label="Load Mars Blue"]').click();await pause();
+  assert(document.querySelector('[aria-label="Hex color"]').value==='#0C2238','Load updates editor RGB and hex without a tag');
+  const name=document.querySelector('[aria-label="Spool label"]');
+  input(name,'Mars Blue Updated');await pause();
+  button('Update Saved Spool').click();
+  await waitFor(()=>document.body.textContent.includes('Updated “Mars Blue Updated”'));
+  assert((await library.listSavedSpools()).find(e=>e.id===profile.id).name==='Mars Blue Updated','Explicit update keeps stable profile identity');
+  assert((await library.listSavedSpools()).every(e=>e.id!==profile.id || new ElegooSpool(new Uint8Array(e.data)).label===e.name),'Updated library name exactly matches stored tag label');
+  button('Save as New').click();
+  await waitFor(()=>document.body.textContent.includes('Saved “Mars Blue Updated”'));
+  assert((await library.listSavedSpools()).length===3,'Save as New creates independent entry');
+  document.querySelector('[aria-label="Duplicate Mars Blue Updated"]').click();
+  await waitFor(()=>document.body.textContent.includes('Duplicated “Mars Blue Updated”'));
+  assert((await library.listSavedSpools()).length===4,'Duplicate creates saved copy');
+  document.querySelector('[aria-label="Delete Mars Blue Updated"]').click();
+  await waitFor(()=>document.body.textContent.includes('Deleted “Mars Blue Updated”'));
+  assert((await library.listSavedSpools()).length===3,'Delete removes only selected entry');
+  const search=document.querySelector('[aria-label="Search saved spools"]');input(search,'not-a-real-spool');await pause();
+  assert(document.body.textContent.includes('No saved spools match your search.'),'Saved-spool search filters library');
+  button('Reset').click();await pause();
+  assert((await library.listSavedSpools()).length===3 && !button('Update Saved Spool'),'Reset detaches editor and preserves library');
+  root.unmount();await pause();
+  const again=createRoot(document.getElementById('root'));again.render(React.createElement(App));
+  await waitFor(()=>document.body.textContent.includes('My Spools (3)'));
+  assert(true,'Saved library reappears after editor remount');
+  again.unmount();
+  for(let n=1;n<=10;n++){
+    const spool=new ElegooSpool();spool.label='Page test '+String(n).padStart(2,'0');
+    await library.saveSpool(library.makeSavedSpool(spool.getRawData()));
+  }
+  const paged=createRoot(document.getElementById('root'));paged.render(React.createElement(App));
+  await waitFor(()=>document.getElementById('my-spools-heading')?.textContent.includes('(13)'));
+  document.querySelector('[aria-controls="my-spools-content"]').click();await pause();
+  const rows=()=>document.querySelectorAll('#my-spools-content ul > li').length;
+  const range=()=>document.querySelector('#my-spools-content [aria-live="polite"]')?.textContent;
+  assert(rows()===5 && button('Previous').disabled,'Library limits the first page to five spools');
+  button('Next').click();await pause();
+  assert(rows()===5 && range().includes('6–10'),'Next shows the second set of five');
+  button('Next').click();await pause();
+  assert(rows()===3 && range().includes('11–13') && button('Next').disabled,'Last page shows only remaining results');
+  for(const remaining of [12,11,10]){
+    document.querySelector('#my-spools-content ul button[aria-label^="Delete "]').click();
+    await waitFor(()=>document.getElementById('my-spools-heading')?.textContent.includes('('+remaining+')'));
+  }
+  assert(rows()===5 && range().includes('6–10'),'Deleting the last page returns to a valid page');
+  input(document.querySelector('[aria-label="Search saved spools"]'),'Page test 01');await pause();
+  assert(rows()===1 && range().includes('1–1') && !button('Next'),'Search covers all saved spools and resets pagination');
+  input(document.querySelector('[aria-label="Search saved spools"]'),'');await pause();
+  assert(rows()===5 && button('Previous').disabled,'Clearing search starts at the first page');
+  paged.unmount();
+  realIndexedDB.deleteDatabase(testDatabase);
+  Object.defineProperty(window, 'indexedDB', { configurable: true, value: {
+    open: () => { throw Error('Storage disabled for test'); },
+  } });
+  const unavailable=createRoot(document.getElementById('root'));unavailable.render(React.createElement(App));
+  await waitFor(()=>document.querySelector('[role="alert"]')?.textContent.includes('Storage disabled for test'));
+  assert(Boolean(button('Mobile')) && button('Save Spool').disabled,'Storage failure reports an error while normal editing and Mobile export remain available');
+  unavailable.unmount();
+  const nfcWrites=[];let waitForTag=false,pendingSignal;
+  window.NDEFReader=class { async write(message,options){
+    if(waitForTag){pendingSignal=options.signal;return new Promise((_resolve,reject)=>options.signal.addEventListener('abort',()=>reject(new DOMException('Cancelled','AbortError'))));}
+    nfcWrites.push(message);
+  } };
+  const withNfc=createRoot(document.getElementById('root'));withNfc.render(React.createElement(App));
+  await waitFor(()=>button('Write Tag'));
+  const nfcLabel=document.querySelector('[aria-label="Spool label"]');
+  input(nfcLabel,'蓝'.repeat(11));await pause();
+  assert(new TextEncoder().encode(nfcLabel.value).length===MAX_LABEL_BYTES && !button('Write Tag').disabled,'Exactly 33 UTF-8 bytes are accepted');
+  button('Write Tag').click();await pause();
+  assert(nfcWrites.length===1,'Valid label can reach the unchanged Web NFC writer');
+  const nfcPayload=nfcWrites[0].records[0].data;
+  assert(nfcPayload.length===139 && new TextDecoder().decode(nfcPayload.subarray(4,37))==='蓝'.repeat(11) && nfcPayload[43]===0x36,'Web NFC retains existing framing and exact 33-byte label');
+  input(nfcLabel,'蓝'.repeat(12));await pause();
+  assert(nfcLabel.value==='蓝'.repeat(12) && button('Write Tag').disabled,'Overlong UTF-8 draft is retained and blocks Web NFC');
+  button('Write Tag').click();await pause();
+  assert(nfcWrites.length===1,'Disabled write cannot send a previous or truncated label');
+  input(nfcLabel,'Ready to write');await pause();waitForTag=true;
+  button('Write Tag').click();await pause();
+  assert(button('Cancel Write'),'Valid write can wait for a tag');
+  input(nfcLabel,'蓝'.repeat(12));await pause();
+  assert(pendingSignal.aborted && nfcWrites.length===1,'Becoming invalid cancels a pending NFC write');
+  waitForTag=false;
+  assert(!button('Read Tag').disabled && !button('Erase Tag').disabled,'Label validation leaves reading and erasing available');
+  button('Erase Tag').click();await pause();
+  assert(nfcWrites.length===2 && nfcWrites[1].records[0].data.every(byte=>byte===0),'Erase still sends its normal zero payload while draft is invalid');
+  withNfc.unmount();delete window.NDEFReader;
+  output.textContent='PASS\n'+checks.join('\n');
+  // Leave a fresh editor visible for manual mobile-layout inspection.
+  Object.defineProperty(window, 'indexedDB', { configurable: true, value: {
+    open: (_name, version) => realIndexedDB.open(testDatabase + '-preview', version),
+  } });
+  createRoot(document.getElementById('root')).render(React.createElement(App));
+}catch(error){output.textContent='FAIL\n'+(error.stack||error)+'\n'+checks.join('\n');}
+</script></body></html>

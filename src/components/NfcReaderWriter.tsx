@@ -1,14 +1,15 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { Nfc } from 'lucide-react';
-import { ElegooSpool } from '../lib/ElegooSpool';
+import { ElegooSpool, MAX_LABEL_BYTES } from '../lib/ElegooSpool';
 
 interface NfcReaderWriterProps {
   spool: ElegooSpool;
   onTagRead: (data: Uint8Array) => void;
   onStatusUpdate: (message: string) => void;
+  disabledReason?: string;
 }
 
-type NfcState = 'idle' | 'scanning-read' | 'scanning-write' | 'success' | 'error';
+type NfcState = 'idle' | 'scanning-read' | 'scanning-write' | 'scanning-erase' | 'success' | 'error';
 
 /**
  * Check if Web NFC is available (Chrome on Android only).
@@ -18,35 +19,18 @@ export function isWebNfcSupported(): boolean {
   return 'NDEFReader' in window;
 }
 
-/**
- * NTAG213 Memory Layout (180 bytes = 45 pages × 4 bytes):
- *
- *   Pages 0-3   (0x00-0x0F): UID, BCC, internal, lock, CC  — read-only via NFC
- *   Pages 4-39  (0x10-0x9F): User data area (144 bytes)     — writable via NDEF
- *   Pages 40-44 (0xA0-0xB3): Dynamic lock, CFG, PWD/PACK    — config area
- *
- * Web NFC writes an NDEF TLV into the user data area starting at page 4 (0x10).
- * The Elegoo printer reads spool data from fixed offsets starting at 0x40 (page 16).
- *
- * To achieve exact byte alignment we write a single "unknown" type NDEF record.
- * The NDEF framing consumes exactly 5 bytes of preamble:
- *   0x10: 03        — NDEF TLV type
- *   0x11: 8B        — TLV length (139)
- *   0x12: D5        — NDEF record header (MB=1,ME=1,SR=1,TNF=5=unknown)
- *   0x13: 00        — Type length (0, no type field)
- *   0x14: 87        — Payload length (135)
- *
- * Payload starts at 0x15 and contains:
- *   0x15-0x3F: 43 bytes of padding (original URL/NDEF area content from template)
- *   0x40-0x9F: 96 bytes of spool data (header, material, color, metadata)
- *
- * This places spool data at exactly offset 0x40 where the printer expects it.
- * TLV terminator FE lands at 0x9E (within user data), followed by zero padding.
- */
+// Observed NDEF TLV starts: 0x10 (fresh) or 0x15 (NFC Tools-prepared).
+// TLV + short unknown-record framing puts payloads at 0x15 or 0x1A.
+const CANVAS_START = 0x40;
+const CANVAS_END = 0xA0;
+const NTAG215_PADDING = CANVAS_START - 0x1A;
+const FRESH_PADDING = CANVAS_START - 0x15;
+const LABEL_MARKER = [0x53, 0x50, 0x01]; // Spool label, version 1
 
-export function NfcReaderWriter({ spool, onTagRead, onStatusUpdate }: NfcReaderWriterProps) {
+export function NfcReaderWriter({ spool, onTagRead, onStatusUpdate, disabledReason }: NfcReaderWriterProps) {
   const [state, setState] = useState<NfcState>('idle');
   const [message, setMessage] = useState('');
+  const [freshLayout, setFreshLayout] = useState(true);
   const abortControllerRef = useRef<AbortController | null>(null);
 
   // Cleanup abort controller on unmount
@@ -64,7 +48,13 @@ export function NfcReaderWriter({ spool, onTagRead, onStatusUpdate }: NfcReaderW
     onStatusUpdate('NFC operation cancelled');
   }, [onStatusUpdate]);
 
-  const handleWrite = useCallback(async () => {
+  useEffect(() => {
+    if (disabledReason && state === 'scanning-write') cancelOperation();
+  }, [disabledReason, state, cancelOperation]);
+
+  const writeTag = useCallback(async (erase: boolean) => {
+    if (abortControllerRef.current) return;
+    if (!erase && disabledReason) return;
     if (!('NDEFReader' in window)) {
       setMessage('Web NFC not supported on this device');
       setState('error');
@@ -72,33 +62,29 @@ export function NfcReaderWriter({ spool, onTagRead, onStatusUpdate }: NfcReaderW
     }
 
     try {
-      setState('scanning-write');
-      setMessage('Hold your phone near the NFC tag...');
-      onStatusUpdate('NFC: Waiting for tag to write...');
+      setState(erase ? 'scanning-erase' : 'scanning-write');
+      setMessage(erase ? 'Hold your phone near the tag you want to erase...' : 'Hold your phone near the NFC tag...');
+      onStatusUpdate(erase ? 'NFC: Waiting for tag to erase...' : 'NFC: Waiting for tag to write...');
 
       const ndef = new NDEFReader();
       abortControllerRef.current = new AbortController();
 
-      const rawData = spool.getRawData();
-
-      // Build the payload for a single "unknown" NDEF record.
-      // The NDEF preamble (TLV header + record header) consumes 5 bytes,
-      // placing the payload start at offset 0x15 in tag memory.
-      // We need spool data at offset 0x40, so we prepend 43 bytes of padding
-      // (the original NDEF URL area content) before the 96-byte spool payload.
-      //
-      // Payload layout (135 bytes total):
-      //   [0..42]   = padding from template (offsets 0x15-0x3F)
-      //   [43..138] = spool data (offsets 0x40-0x9F)
-
-      // Padding: use the original template bytes from 0x15-0x3F
-      // This preserves the elegoo.com URL area content in the padding region
-      const padding = rawData.slice(0x15, 0x40); // 43 bytes
-      const spoolPayload = rawData.slice(0x40, 0xA0); // 96 bytes
-
-      const fullPayload = new Uint8Array(padding.length + spoolPayload.length);
-      fullPayload.set(padding, 0);
-      fullPayload.set(spoolPayload, padding.length);
+      // Erase uses the longer existing payload for either observed layout:
+      // 139 zero bytes at 0x15..0x9F or 0x1A..0xA4 (inclusive).
+      // This covers both labels and Canvas 0x40..0x9F without selecting a
+      // layout. Physical placement still needs dump verification; this
+      // neither wipes all user memory nor requests a TLV offset reset.
+      const padding = erase || freshLayout ? FRESH_PADDING : NTAG215_PADDING;
+      const fullPayload = new Uint8Array(padding + CANVAS_END - CANVAS_START);
+      // A short empty NDEF record could leave the old Canvas bytes intact.
+      // Write zeros across the same region as a normal spool write.
+      if (!erase) {
+        const label = new TextEncoder().encode(spool.label);
+        fullPayload.set(LABEL_MARKER);
+        fullPayload[LABEL_MARKER.length] = label.length;
+        fullPayload.set(label, LABEL_MARKER.length + 1);
+        fullPayload.set(spool.getRawData().subarray(CANVAS_START, CANVAS_END), padding);
+      }
 
       await ndef.write(
         {
@@ -113,14 +99,8 @@ export function NfcReaderWriter({ spool, onTagRead, onStatusUpdate }: NfcReaderW
       );
 
       setState('success');
-      setMessage('Tag written successfully!');
-      onStatusUpdate('NFC: Tag written successfully');
-
-      // Reset state after a delay
-      setTimeout(() => {
-        setState('idle');
-        setMessage('');
-      }, 3000);
+      setMessage(erase ? 'Erase write completed. Check Canvas, then rewrite to verify reuse.' : 'Tag written successfully!');
+      onStatusUpdate(erase ? 'NFC: 139-byte erase write completed; Canvas check required' : 'NFC: Tag written successfully');
     } catch (error) {
       if ((error as Error).name === 'AbortError') {
         setState('idle');
@@ -130,12 +110,12 @@ export function NfcReaderWriter({ spool, onTagRead, onStatusUpdate }: NfcReaderW
       console.error('NFC write error:', error);
       setState('error');
       const errMsg = error instanceof Error ? error.message : 'Unknown error';
-      setMessage(`Write failed: ${errMsg}`);
+      setMessage(`${erase ? 'Erase' : 'Write'} failed: ${errMsg}`);
       onStatusUpdate(`NFC write error: ${errMsg}`);
     } finally {
       abortControllerRef.current = null;
     }
-  }, [spool, onStatusUpdate]);
+  }, [spool, onStatusUpdate, freshLayout, disabledReason]);
 
   const handleRead = useCallback(async () => {
     if (!('NDEFReader' in window)) {
@@ -210,7 +190,7 @@ export function NfcReaderWriter({ spool, onTagRead, onStatusUpdate }: NfcReaderW
     }
   }, [onTagRead, onStatusUpdate]);
 
-  const isScanning = state === 'scanning-read' || state === 'scanning-write';
+  const isScanning = state === 'scanning-read' || state === 'scanning-write' || state === 'scanning-erase';
 
   return (
     <div className="bg-white rounded-lg shadow-md p-4 mb-4">
@@ -218,6 +198,20 @@ export function NfcReaderWriter({ spool, onTagRead, onStatusUpdate }: NfcReaderW
         <Nfc size={16} className="text-emerald-600" />
         NFC Tag Reader / Writer
       </h2>
+
+      <label className="mb-2 block text-xs font-medium">
+        Tag layout for writing
+        <select className="mt-1 block w-full rounded border p-2" disabled={isScanning}
+          value={freshLayout ? 'fresh' : 'prepared'}
+          onChange={(event) => setFreshLayout(event.target.value === 'fresh')}>
+          <option value="fresh">Fresh or only written in Site</option>
+          <option value="prepared">NFC Tools Prepared</option>
+        </select>
+      </label>
+
+      <p className="mb-2 text-xs text-gray-600">
+        Erase covers both observed layouts; verify on Canvas before reuse. NFC Tools Format can completely clear.
+      </p>
 
       <div className="grid sm:grid-cols-2 gap-2">
         <button
@@ -233,8 +227,10 @@ export function NfcReaderWriter({ spool, onTagRead, onStatusUpdate }: NfcReaderW
         </button>
 
         <button
-          onClick={isScanning ? cancelOperation : handleWrite}
-          className={`flex items-center justify-center gap-1.5 px-3 py-2 text-xs rounded-md font-medium transition-colors ${
+          onClick={() => isScanning ? cancelOperation() : void writeTag(false)}
+          disabled={Boolean(disabledReason) && !isScanning}
+          title={disabledReason}
+          className={`flex items-center justify-center gap-1.5 px-3 py-2 text-xs rounded-md font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
             state === 'scanning-write'
               ? 'bg-amber-500 text-white hover:bg-amber-600 animate-pulse'
               : 'bg-indigo-600 text-white hover:bg-indigo-700'
@@ -244,6 +240,21 @@ export function NfcReaderWriter({ spool, onTagRead, onStatusUpdate }: NfcReaderW
           {state === 'scanning-write' ? 'Cancel Write' : 'Write Tag'}
         </button>
       </div>
+
+      <button
+        type="button"
+        disabled={isScanning && state !== 'scanning-erase'}
+        onClick={() => {
+          if (state === 'scanning-erase') {
+            cancelOperation();
+          } else if (window.confirm('Erase the spool data and label from the next tag you scan?')) {
+            void writeTag(true);
+          }
+        }}
+        className="mt-2 w-full rounded-md border border-red-300 px-3 py-2 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-50"
+      >
+        {state === 'scanning-erase' ? 'Cancel Erase' : 'Erase Tag'}
+      </button>
 
       {/* Status message */}
       {message && (
@@ -261,42 +272,41 @@ export function NfcReaderWriter({ spool, onTagRead, onStatusUpdate }: NfcReaderW
       )}
 
       <p className="mt-2 text-[11px] text-amber-500">
-        ⚠ Web NFC may not be compatible with all phones. For guaranteed compatibility, use Export options with a dedicated NFC app.
+        ⚠ Web NFC may not be compatible with all phones. Use Export Tools above with a compatible NFC app, such as NFC Tools.
       </p>
     </div>
   );
 }
 
-/**
- * Parse an NDEF reading event into a 180-byte spool data array.
- *
- * When this app writes a tag, it uses a single "unknown" type NDEF record
- * containing 135 bytes: 43 bytes of padding + 96 bytes of spool data.
- * The spool data corresponds to offsets 0x40-0x9F of the 180-byte tag dump.
- */
+// Restore the Canvas bytes and label into the editor's raw export layout.
 function parseNdefToSpoolData(event: NDEFReadingEvent): Uint8Array {
-  // Start with a blank spool template
-  const template = new ElegooSpool();
-  const data = new Uint8Array(template.getRawData());
-
-  // Look for our unknown-type record with the expected payload size
+  const canvasLength = CANVAS_END - CANVAS_START;
   for (const record of event.message.records) {
-    if (record.recordType === 'unknown' && record.data) {
-      const payload = new Uint8Array(
-        record.data.buffer,
-        record.data.byteOffset,
-        record.data.byteLength,
-      );
-
-      // Expected layout: 43 bytes padding + 96 bytes spool data = 135 bytes
-      if (payload.length >= 43 + 1) {
-        // Extract spool data from after the 43-byte padding
-        const spoolBytes = payload.subarray(43);
-        const maxLen = Math.min(spoolBytes.length, 0xA0 - 0x40);
-        data.set(spoolBytes.subarray(0, maxLen), 0x40);
-        return data;
-      }
+    if (record.recordType !== 'unknown' || !record.data) continue;
+    const payload = new Uint8Array(record.data.buffer, record.data.byteOffset, record.data.byteLength);
+    const padding = payload.length - canvasLength;
+    if ((padding === NTAG215_PADDING || padding === FRESH_PADDING) && payload.every((byte) => byte === 0)) {
+      throw new Error('Tag is blank. Use Write Tag to assign a spool.');
     }
+    if ((padding !== NTAG215_PADDING && padding !== FRESH_PADDING) ||
+        payload[padding] !== 0x36) continue;
+
+    const spool = new ElegooSpool();
+    const data = spool.getRawData();
+    data.set(payload.subarray(padding), CANVAS_START);
+
+    if (LABEL_MARKER.every((byte, index) => payload[index] === byte)) {
+      const size = payload[LABEL_MARKER.length];
+      const start = LABEL_MARKER.length + 1;
+      if (size <= MAX_LABEL_BYTES) {
+        spool.label = new TextDecoder().decode(payload.subarray(start, start + size));
+      }
+    } else if (padding === FRESH_PADDING) {
+      data.set(payload.subarray(0, padding), 0x15);
+      const label = spool.label;
+      if (label) spool.label = label;
+    }
+    return data;
   }
 
   // No compatible record found

@@ -10,13 +10,6 @@ export function HexEditor({ data }: HexEditorProps) {
   const getDescriptionForPage = (page: number): string => {
     // Page 3: Capability Container (Capability Container typically at page 3)
     if (page === 3) return 'Capability Container';
-    // NDEF / URI pages (4-15)
-    if (page === 4) return 'NDEF TLV / Structure';
-    if (page === 5) return 'NDEF Message Header';
-    if (page === 6) return 'NDEF Record (URI, prefix https://)';
-    if (page >= 7 && page <= 9) return 'Marketing URL / URI payload';
-    if (page >= 10 && page <= 15) return 'Reserved for URI';
-
     // Filament / printer section (pages 16+)
     if (page === 16) return 'Header (filament section start)';
     if (page === 17) return 'Manufacturer ID';
@@ -28,15 +21,8 @@ export function HexEditor({ data }: HexEditorProps) {
     // Page 24: reserved 64-bit block (starting at offset 0x63) per Elegoo spec
     if (page === 24) return 'Production / Reserved (64-bit block starting at 0x63)';
 
-    // Tag configuration / password pages (common NTAG area)
-    if (page === 40) return 'Dynamic Lock Bytes / RFUI';
-    if (page === 41) return 'CFG0';
-    if (page === 42) return 'CFG1';
-    if (page === 43) return 'PWD';
-    if (page === 44) return 'PACK / RFUI';
-
-    // Config/password area
-    if (page >= 160 && page <= 175) return 'Config/Password';
+    if (page >= 40 && page <= 44) return 'Legacy template bytes (NTAG215 user area)';
+    if (page >= 4 && page <= 15) return 'Phone label / NDEF area';
 
     // UID / checksums (first pages)
     if (page === 2) return 'UID / BCC1 Checksum';
@@ -48,7 +34,7 @@ export function HexEditor({ data }: HexEditorProps) {
   const getFieldDescriptionByOffset = (offset: number): string => {
     if (offset < 0x09) return 'UID / Serial';
     if (offset === 0x09) return 'BCC1 Checksum';
-    if (offset >= 0x1C && offset <= 0x25) return 'Marketing URL';
+    if (offset >= 0x1C && offset <= 0x25) return 'Phone label / NDEF area';
     if (offset === 0x40) return 'Header';
     if (offset >= 0x41 && offset <= 0x44) return 'Manufacturer Code';
     if (offset >= 0x45 && offset <= 0x46) return 'Filament Code';
@@ -61,7 +47,7 @@ export function HexEditor({ data }: HexEditorProps) {
     if (offset === 0x5C || offset === 0x5D) return 'Filament Diameter';
     if (offset === 0x5E || offset === 0x5F) return 'Filament Weight';
     if (offset === 0x60 || offset === 0x61) return 'Production Date';
-    if (offset >= 0xA0 && offset <= 0xAF) return 'Config/Password';
+    if (offset >= 0xA0 && offset <= 0xAF) return 'Legacy template bytes';
     // Elegoo spec: 64-bit reserved block starting at 0x63 (note: covers offsets 0x63..0x6A)
     if (offset >= 0x63 && offset <= 0x6A) return 'Reserved (64-bit block)';
     return '';
