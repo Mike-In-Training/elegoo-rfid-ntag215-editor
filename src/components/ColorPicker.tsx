@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react';
+import { PhotoColorPicker } from './PhotoColorPicker';
 
 interface ColorPickerProps {
   value: { r: number; g: number; b: number };
   onChange: (color: { r: number; g: number; b: number }) => void;
+  onStatusUpdate?: (message: string) => void;
 }
 
-export function ColorPicker({ value, onChange }: ColorPickerProps) {
+export function ColorPicker({ value, onChange, onStatusUpdate }: ColorPickerProps) {
   const hexColor = `#${value.r.toString(16).padStart(2, '0')}${value.g.toString(16).padStart(2, '0')}${value.b.toString(16).padStart(2, '0')}`;
   const [hexInput, setHexInput] = useState(hexColor.toUpperCase());
   const [rgbInput, setRgbInput] = useState({ r: String(value.r), g: String(value.g), b: String(value.b) });
@@ -83,6 +85,10 @@ export function ColorPicker({ value, onChange }: ColorPickerProps) {
           ))}
         </div>
       </div>
+      <PhotoColorPicker onChange={onChange} onStatusUpdate={onStatusUpdate} />
     </div>
   );
 }
+
+
+

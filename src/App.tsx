@@ -358,7 +358,7 @@ function App() {
                     onChange={handleSubtypeChange}
                   />
                 </div>
-                <ColorPicker value={spool.color} onChange={handleColorChange} />
+                <ColorPicker value={spool.color} onChange={handleColorChange} onStatusUpdate={addLog} />
               </div>
 
               <MetadataFields
@@ -404,3 +404,4 @@ function App() {
 }
 
 export default App;
+

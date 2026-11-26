@@ -1,0 +1,73 @@
+<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><div id="root" style="padding-bottom:100vh"></div><pre id="result">RUNNING</pre>
+<script type="module">
+import '/src/index.css';
+import React, { useState } from 'react';
+import { createRoot } from 'react-dom/client';
+import { ColorPicker } from '/src/components/ColorPicker.tsx';
+const checks=[];
+const assert=(ok,message)=>{if(!ok)throw Error(message);checks.push(message);};
+const pause=()=>new Promise(r=>setTimeout(r,60));
+const wait=async fn=>{for(let i=0;i<100;i++){if(fn())return;await pause();}throw Error('Timed out');};
+const button=text=>[...document.querySelectorAll('button')].find(n=>n.textContent.trim()===text);
+const hex=()=>document.querySelector('[aria-label="Hex color"]').value;
+function Harness(){const [value,setValue]=useState({r:12,g:34,b:56});return React.createElement(ColorPicker,{value,onChange:setValue});}
+const photo=document.createElement('canvas');photo.width=200;photo.height=100;
+const ctx=photo.getContext('2d');ctx.fillStyle='#FF0000';ctx.fillRect(0,0,100,100);ctx.fillStyle='#0000FF';ctx.fillRect(100,0,100,100);
+const blob=await new Promise(r=>photo.toBlob(r,'image/png'));
+const good=new File([blob],'sample.png',{type:'image/png'});
+const choose=file=>{const node=document.querySelector('[aria-label="Choose a photo for color picking"]');const transfer=new DataTransfer();transfer.items.add(file);node.files=transfer.files;node.dispatchEvent(new Event('change',{bubbles:true}));};
+const click=(x,y)=>{const node=document.querySelector('canvas');const rect=node.getBoundingClientRect();node.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,cancelable:true,isPrimary:true,pointerType:'touch',button:0,clientX:rect.left+x*rect.width,clientY:rect.top+y*rect.height}));};
+try{
+createRoot(document.getElementById('root')).render(React.createElement(Harness));await wait(()=>button('Pick from photo'));
+button('Pick from photo').click();await pause();
+assert(document.querySelector('[capture="environment"]'),'Camera requests rear-facing photo capture');
+assert(!document.querySelector('[aria-label="Choose a photo for color picking"]').hasAttribute('capture'),'Existing-photo chooser remains available independently');
+choose(good);await wait(()=>document.querySelector('canvas').width===200&&button('Use this color'));
+assert(button('Use this color').disabled,'Confirmation requires a sampled point');
+click(.2,.5);await pause();
+assert(document.querySelector('[role="status"]').textContent.includes('#FF0000'),'Tap maps displayed photo coordinates to exact pixel color');
+const closeButton=document.querySelector('[aria-label="Close photo picker"]');
+closeButton.dispatchEvent(new MouseEvent('click',{bubbles:true,detail:1}));await pause();
+assert(button('Use this color'),'A delayed click without a fresh close-button press cannot dismiss the photo');
+window.dispatchEvent(new Event('blur'));window.dispatchEvent(new Event('focus'));window.dispatchEvent(new Event('resize'));document.dispatchEvent(new Event('visibilitychange'));await pause();
+assert(button('Use this color'),'Camera-return focus, visibility and resize events leave the panel open');
+assert(document.querySelector('canvas').style.touchAction==='none','Photo sampling prevents browser touch gestures on the image');
+const menu=new MouseEvent('contextmenu',{bubbles:true,cancelable:true});document.querySelector('canvas').dispatchEvent(menu);
+assert(menu.defaultPrevented,'Photo context menu is suppressed');
+button('Pick from photo').click();await pause();
+assert(button('Use this color')&&!button('Use this color').disabled,'Tapping the launch button again keeps the selected photo open');
+assert(hex()==='#0C2238','Preview does not modify current spool color');
+button('Use this color').click();await pause();
+assert(hex()==='#FF0000'&&document.querySelector('[aria-label="R color value"]').value==='255','Confirm updates both hex and RGB');
+assert(!button('Use this color'),'Confirm closes photo panel');
+button('Pick from photo').click();await pause();choose(good);await wait(()=>button('Use this color'));click(.8,.5);await pause();
+document.querySelector('[aria-label="Close photo picker"]').click();await pause();
+assert(hex()==='#FF0000','Cancel discards the sampled color');
+button('Pick from photo').click();await pause();choose(good);await wait(()=>button('Use this color'));click(0,0);await pause();
+assert(document.querySelector('[role="status"]').textContent.includes('#FF0000'),'Photo-edge sampling clamps the average patch safely');
+click(.5,.5);await pause();
+assert(document.querySelector('[role="status"]').textContent.includes('#6D0092'),'Sample averages a seven-pixel patch across a color boundary');
+document.querySelector('canvas').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true}));await pause();
+assert(document.querySelector('[role="status"]').textContent.includes('#0000FF'),'Keyboard arrows move the sample');
+document.querySelector('canvas').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));await pause();
+assert(button('Use this color')&&hex()==='#FF0000','An Escape event from the native camera cannot dismiss the photo');
+document.querySelector('[aria-label="Close photo picker"]').click();await pause();
+button('Pick from photo').click();await pause();choose(new File(['invalid'],'bad.jpg',{type:'image/jpeg'}));await wait(()=>document.querySelector('[role="alert"]'));
+assert(hex()==='#FF0000'&&!button('Use this color'),'Invalid photo reports error without changing color');
+choose(good);await wait(()=>button('Use this color'));click(.8,.5);await pause();button('Use this color').click();await pause();
+assert(hex()==='#0000FF','Valid photo can be selected again after a decode error');
+button('Pick from photo').click();await pause();
+const tall=document.createElement('canvas');tall.width=400;tall.height=1600;tall.getContext('2d').fillRect(0,0,400,1600);
+const tallBlob=await new Promise(r=>tall.toBlob(r,'image/png'));choose(new File([tallBlob],'portrait.png',{type:'image/png'}));
+await wait(()=>button('Use this color'));await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+const panel=document.querySelector('#photo-color-picker').getBoundingClientRect();
+const photoBounds=document.querySelector('canvas').getBoundingClientRect();
+const confirmBounds=button('Use this color').getBoundingClientRect();
+assert(panel.top>=0&&panel.top<30,'Loaded photo scrolls the picker to the top of the viewport');
+assert(photoBounds.top>=0&&photoBounds.bottom<=innerHeight&&confirmBounds.bottom<=innerHeight,'Portrait photo and confirmation remain visible together');
+click(.5,.5);await pause();assert(button('Use this color')&&!button('Use this color').disabled,'Portrait photo remains open when touched');
+assert(document.documentElement.scrollWidth<=window.innerWidth,'Picker fits a mobile viewport without horizontal overflow');
+document.getElementById('result').textContent='PASS\n'+checks.join('\n');
+}catch(error){document.getElementById('result').textContent='FAIL\n'+error.stack+'\n'+checks.join('\n');}
+</script></body></html>
+

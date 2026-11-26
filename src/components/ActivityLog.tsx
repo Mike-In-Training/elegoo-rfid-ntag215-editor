@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { ChevronDown, ChevronUp, Terminal } from 'lucide-react';
+import { readPhotoTrace, savePhotoTrace } from '../lib/photoDiagnostics';
 
 interface ActivityLogProps {
   log: string[];
@@ -33,6 +34,11 @@ export function ActivityLog({ log }: ActivityLogProps) {
                 <span>{entry}</span>
               </div>
             ))}
+            {readPhotoTrace() && <details className="border-t border-gray-700 pt-2">
+              <summary className="cursor-pointer">Photo troubleshooting (survives page reloads)</summary>
+              <pre className="mt-2 whitespace-pre-wrap break-words">{readPhotoTrace()}</pre>
+              <button type="button" onClick={savePhotoTrace} className="my-2 rounded border border-gray-500 px-3 py-2">Save diagnostic log</button>
+            </details>}
           </div>
         </div>
       )}

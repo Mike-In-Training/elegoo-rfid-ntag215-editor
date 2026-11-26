@@ -26,3 +26,11 @@ When Web NFC is unavailable, configure the spool here and choose **Export Tools 
 [NFC Tools by wakdev](https://www.wakdev.com/en/apps/nfc-tools-android.html) is a separate companion application, not bundled with this editor. Advanced-command availability depends on the app edition and device; this workflow does not guarantee support on every phone or on iOS.
 
 For tags previously prepared by another tool, the Web NFC layout selector matters. NFC Tools **Format** was verified on the tested NTAG215 to reset its NDEF placement, after which the site's **Fresh or only written in site** option worked. **Erase** and **Format** are different operations. See the [tag layout notes](./tag-layout.md) for the observed behavior.
+
+## Pick a color from a photo
+
+Beside the filament color controls, choose **Pick from photo**, then **Take photo** or **Choose photo**. On supported phones, Take photo requests the rear camera; other browsers may offer a file chooser.
+
+Tap the filament in the photo to preview the average color of a small surrounding area. **Use this color** updates both RGB and hex. Closing the picker leaves your current filament color unchanged. On a keyboard, focus the photo and use Enter and the arrow keys.
+
+Photos are processed locally and are not saved in My Spools or uploaded. Only the confirmed RGB color becomes part of the spool. Even lighting and avoiding reflections give a better starting point; this is not a calibrated color measurement.
