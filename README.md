@@ -4,7 +4,7 @@ Create reusable Elegoo filament stickers, pick colors from filament catalogs, an
 
 **Edit → save your spool → write with Web NFC or export to NFC Tools.**
 
-Planned app address (available after deployment): [Open the editor](https://mike-in-training.github.io/elegoo-rfid-ntag215-editor/)
+**Live demo:** [Open the editor](https://mike-in-training.github.io/elegoo-rfid-ntag215-editor/)
 
 - **Spool configuration:** catalog presets, editable RGB/hex colors and spool labels.
 - **My Spools:** save, search, edit and back up configurations without needing the original tag.
@@ -32,3 +32,4 @@ Web NFC and companion-app features depend on the phone and browser. The Hex Edit
 This project uses React, TypeScript, Tailwind CSS, Lucide, Vite and vite-plugin-pwa. NFC Tools is a separate companion app by wakdev.
 
 [MIT licensed](./LICENSE), retaining the original copyright notice.
+
