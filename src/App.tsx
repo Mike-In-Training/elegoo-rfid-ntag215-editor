@@ -10,6 +10,7 @@ import { ColorPicker } from './components/ColorPicker';
 import { ColorCatalogs, type CatalogColorSelection } from './components/ColorCatalogs';
 import { SpoolLibrary } from './components/SpoolLibrary';
 import type { SavedSpool } from './lib/spoolLibrary';
+import { SpoolLabelSettings, formatSpoolLabel, readLabelFormat } from './components/SpoolLabelSettings';
 import { MetadataFields } from './components/MetadataFields';
 import { ExportButtons } from './components/ExportButtons';
 import { Header } from './components/Header';
@@ -24,6 +25,7 @@ function App() {
   const [showHexEditor, setShowHexEditor] = useState(false);
   const [savedSpoolId, setSavedSpoolId] = useState<string | null>(null);
   const [labelDraft, setLabelDraft] = useState<string | null>(null);
+  const [labelFormat, setLabelFormat] = useState(readLabelFormat);
   const labelInputRef = useRef<HTMLInputElement>(null);
   const [nfcSupported] = useState(() => isWebNfcSupported());
   const label = labelDraft ?? spool?.label ?? '';
@@ -136,7 +138,7 @@ function App() {
     }
     const hex = color.hex.replace(/^#/, '');
     next.color = { r: parseInt(hex.slice(0, 2), 16), g: parseInt(hex.slice(2, 4), 16), b: parseInt(hex.slice(4, 6), 16) };
-    applyLabel(next, `${manufacturer}-${material} | ${color.name}`);
+    applyLabel(next, formatSpoolLabel(labelFormat, { Brand: manufacturer, Filament: material, Color: color.name }));
     setSpool(next);
     setFileName(generateDefaultFileName(next).replace('.bin', ''));
   };
@@ -310,7 +312,10 @@ function App() {
               </div>
 
               <div className="md:col-span-2 text-sm font-medium text-gray-700">
-                <label htmlFor="spool-label">Spool label</label>
+                <div className="flex items-center gap-1">
+                  <label htmlFor="spool-label">Spool label</label>
+                  <SpoolLabelSettings format={labelFormat} onChange={setLabelFormat} />
+                </div>
                 <div className="relative mt-1">
                   <input
                     id="spool-label"
